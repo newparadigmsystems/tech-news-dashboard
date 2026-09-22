@@ -1,0 +1,25 @@
+# Environment variables (API keys)
+.env
+*.env
+backend/.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+backend/venv/
+venv/
+backend/data/*.db
+backend/data/*.db-journal
+*.db
+*.db-shm
+*.db-wal
+
+# Node
+node_modules/
+frontend/node_modules/
+frontend/dist/
+
+# OS
+.DS_Store
+*.log
