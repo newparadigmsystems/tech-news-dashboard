@@ -12,7 +12,7 @@ load_dotenv()
 
 from database import (
     init_db, query_articles, get_categories_stats,
-    get_publications_stats, get_overview_stats
+    get_publications_stats, get_overview_stats, classify_and_update_all_articles
 )
 from ingestion import ingest_all_feeds, load_feeds
 from curator import run_curation_pipeline, is_gemini_available
@@ -32,9 +32,12 @@ async def scheduled_feed_sync():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: Initialize DB
+    # Startup: Initialize DB & run noise classification
     print("[Startup] Initializing SQLite database...")
     init_db()
+    cleaned = classify_and_update_all_articles()
+    if cleaned > 0:
+        print(f"[Startup] Classified and flagged {cleaned} non-news items (events/deals/workshops).")
     
     # Check if DB has any articles; if empty, trigger initial ingestion
     stats = get_overview_stats()
@@ -78,7 +81,8 @@ def get_articles(
     end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD or ISO)"),
     sort_by: str = Query("newest", pattern="^(newest|oldest|publication|title)$"),
     page: int = Query(1, ge=1),
-    page_size: int = Query(30, ge=5, le=100)
+    page_size: int = Query(30, ge=5, le=100),
+    exclude_noise: bool = Query(True, description="Exclude non-news items like webinars, events, workshops, and promo deals")
 ):
     return query_articles(
         q=q,
@@ -88,16 +92,17 @@ def get_articles(
         end_date=end_date,
         sort_by=sort_by,
         page=page,
-        page_size=page_size
+        page_size=page_size,
+        exclude_noise=exclude_noise
     )
 
 @app.get("/api/categories")
-def get_categories():
-    return get_categories_stats()
+def get_categories(exclude_noise: bool = Query(True)):
+    return get_categories_stats(exclude_noise=exclude_noise)
 
 @app.get("/api/publications")
-def get_publications():
-    return get_publications_stats()
+def get_publications(exclude_noise: bool = Query(True)):
+    return get_publications_stats(exclude_noise=exclude_noise)
 
 @app.get("/api/stats")
 def get_stats():

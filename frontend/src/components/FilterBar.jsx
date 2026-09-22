@@ -1,5 +1,5 @@
 import React from 'react';
-import { Filter, Calendar, Layers, ArrowUpDown, X, ChevronDown } from 'lucide-react';
+import { Filter, Calendar, Layers, ArrowUpDown, X, ChevronDown, ShieldCheck } from 'lucide-react';
 
 const CATEGORIES = [
   { id: 'all', label: 'All Topics' },
@@ -46,7 +46,10 @@ export default function FilterBar({
   categoryCounts,
   totalResults,
   onResetFilters,
-  hasActiveFilters
+  hasActiveFilters,
+  excludeNoise,
+  onToggleExcludeNoise,
+  filteredNoiseCount
 }) {
   return (
     <div className="bg-white dark:bg-dark-900 border-b border-gray-200 dark:border-gray-800 transition-colors">
@@ -146,6 +149,25 @@ export default function FilterBar({
               </select>
               <ChevronDown className="w-3.5 h-3.5 text-gray-400 pointer-events-none absolute right-2.5 top-2.5" />
             </div>
+
+            {/* Smart News Filter Toggle (Exclude Events/Workshops/Sales) */}
+            <button
+              onClick={onToggleExcludeNoise}
+              className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-xl border transition-all ${
+                excludeNoise
+                  ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800/60'
+                  : 'bg-gray-100 dark:bg-dark-800 text-gray-600 dark:text-gray-400 border-transparent hover:border-gray-300 dark:hover:border-gray-700'
+              }`}
+              title={excludeNoise ? "Excluding event notices, webinars, classes, workshops & coupon deals" : "Showing all entries including events and promotions"}
+            >
+              <ShieldCheck className={`w-3.5 h-3.5 ${excludeNoise ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-400'}`} />
+              <span>{excludeNoise ? 'News Only' : 'Include Events'}</span>
+              {excludeNoise && filteredNoiseCount > 0 && (
+                <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-emerald-200/60 dark:bg-emerald-900/60 font-semibold text-emerald-800 dark:text-emerald-200">
+                  -{filteredNoiseCount}
+                </span>
+              )}
+            </button>
 
             {/* Reset Filters */}
             {hasActiveFilters && (

@@ -23,6 +23,7 @@ export default function App() {
   const [sortBy, setSortBy] = useState('newest');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(30);
+  const [excludeNoise, setExcludeNoise] = useState(true);
 
   // Data States
   const [articles, setArticles] = useState([]);
@@ -106,8 +107,8 @@ export default function App() {
   const fetchMetadata = async () => {
     try {
       const [catsRes, pubsRes, statsRes] = await Promise.all([
-        fetch('/api/categories'),
-        fetch('/api/publications'),
+        fetch(`/api/categories?exclude_noise=${excludeNoise}`),
+        fetch(`/api/publications?exclude_noise=${excludeNoise}`),
         fetch('/api/stats')
       ]);
       if (catsRes.ok) {
@@ -148,6 +149,7 @@ export default function App() {
       params.append('sort_by', sortBy);
       params.append('page', page);
       params.append('page_size', pageSize);
+      params.append('exclude_noise', excludeNoise);
 
       const res = await fetch(`/api/articles?${params.toString()}`);
       if (!res.ok) {
@@ -163,12 +165,12 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  }, [debouncedQuery, category, publication, getDateRange, sortBy, page, pageSize]);
+  }, [debouncedQuery, category, publication, getDateRange, sortBy, page, pageSize, excludeNoise]);
 
   // Initial Load
   useEffect(() => {
     fetchMetadata();
-  }, []);
+  }, [excludeNoise]);
 
   // Fetch articles on filter change
   useEffect(() => {
@@ -281,6 +283,12 @@ export default function App() {
         totalResults={totalResults}
         onResetFilters={handleResetFilters}
         hasActiveFilters={hasActiveFilters}
+        excludeNoise={excludeNoise}
+        onToggleExcludeNoise={() => {
+          setExcludeNoise(!excludeNoise);
+          setPage(1);
+        }}
+        filteredNoiseCount={stats?.filtered_noise_count || 0}
       />
 
       {/* Main Feed Container */}
