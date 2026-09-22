@@ -5,12 +5,20 @@
 
 set -e
 
+# Ensure standard Homebrew and system paths are loaded
+export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 cd "$DIR"
 
 echo "=========================================================="
 echo "  📡 Starting TechRadar - Research & News Aggregator"
 echo "=========================================================="
+
+# Ensure ports 8000 and 5173 are free from any previous runs
+lsof -ti:8000 | xargs kill -9 2>/dev/null || true
+lsof -ti:5173 | xargs kill -9 2>/dev/null || true
+sleep 1
 
 # 1. Check Python Virtualenv
 if [ ! -d "backend/venv" ]; then
@@ -31,6 +39,8 @@ cleanup() {
     echo "🛑 Shutting down TechRadar servers..."
     kill "$BACKEND_PID" 2>/dev/null || true
     kill "$FRONTEND_PID" 2>/dev/null || true
+    lsof -ti:8000 | xargs kill -9 2>/dev/null || true
+    lsof -ti:5173 | xargs kill -9 2>/dev/null || true
     wait "$BACKEND_PID" 2>/dev/null || true
     wait "$FRONTEND_PID" 2>/dev/null || true
     echo "✅ Stopped."
@@ -60,6 +70,9 @@ echo "  📚 API Docs:  http://127.0.0.1:8000/docs"
 echo "=========================================================="
 echo "  Press Ctrl+C to stop both servers."
 echo ""
+
+# Automatically open default browser after a brief spin-up pause
+(sleep 2 && open "http://localhost:5173") &
 
 # Wait for both processes
 wait "$BACKEND_PID" "$FRONTEND_PID"

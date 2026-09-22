@@ -88,6 +88,17 @@ export default function ArticleCard({ article, onTagClick }) {
             </p>
           )}
 
+          {/* Key Takeaway / AI Insight if present */}
+          {article.key_takeaway && (
+            <div className="mb-3 px-3 py-2 rounded-xl bg-purple-50/70 dark:bg-purple-950/30 border border-purple-100 dark:border-purple-900/40 text-xs text-purple-900 dark:text-purple-200 flex items-start gap-2 leading-relaxed">
+              <Sparkles className="w-3.5 h-3.5 text-purple-600 dark:text-purple-400 shrink-0 mt-0.5" />
+              <span>
+                <strong className="font-semibold text-purple-700 dark:text-purple-300">Key Takeaway: </strong>
+                {article.key_takeaway}
+              </span>
+            </div>
+          )}
+
           {/* Cluster / Multi-outlet coverage indicator if present */}
           {article.cluster_id && (
             <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-indigo-50/80 dark:bg-indigo-950/40 border border-indigo-200/60 dark:border-indigo-800/60 text-xs text-indigo-700 dark:text-indigo-300 mb-3">
@@ -101,15 +112,42 @@ export default function ArticleCard({ article, onTagClick }) {
         <div className="pt-3 mt-2 border-t border-gray-100 dark:border-gray-800/80 flex flex-wrap items-center justify-between gap-2 text-xs">
           {/* Tags / Named Entities */}
           <div className="flex flex-wrap items-center gap-1.5">
-            {article.tags && article.tags.slice(0, 3).map((tag, idx) => (
-              <button
-                key={idx}
-                onClick={() => onTagClick?.(tag)}
-                className="px-2 py-0.5 rounded-md bg-gray-100 dark:bg-dark-700 text-gray-600 dark:text-gray-400 hover:bg-indigo-50 hover:text-indigo-600 dark:hover:bg-dark-600 transition-colors"
-              >
-                #{tag}
-              </button>
-            ))}
+            {(() => {
+              const seen = new Set();
+              const items = [];
+              if (Array.isArray(article.entities)) {
+                for (const e of article.entities) {
+                  const key = String(e).toLowerCase().trim();
+                  if (key && !seen.has(key)) {
+                    seen.add(key);
+                    items.push({ text: e, isEntity: true });
+                  }
+                }
+              }
+              if (Array.isArray(article.tags)) {
+                for (const t of article.tags) {
+                  const key = String(t).toLowerCase().trim();
+                  if (key && !seen.has(key)) {
+                    seen.add(key);
+                    items.push({ text: t, isEntity: false });
+                  }
+                }
+              }
+              return items.slice(0, 4).map((item, idx) => (
+                <button
+                  key={idx}
+                  onClick={() => onTagClick?.(item.text)}
+                  className={`px-2 py-0.5 rounded-md transition-colors ${
+                    item.isEntity
+                      ? 'bg-purple-50 dark:bg-purple-950/50 text-purple-700 dark:text-purple-300 hover:bg-purple-100 dark:hover:bg-purple-900/50 border border-purple-200/60 dark:border-purple-800/60 font-medium'
+                      : 'bg-gray-100 dark:bg-dark-700 text-gray-600 dark:text-gray-400 hover:bg-indigo-50 hover:text-indigo-600 dark:hover:bg-dark-600'
+                  }`}
+                  title={item.isEntity ? `AI Entity: click to search "${item.text}"` : `Tag: click to search "${item.text}"`}
+                >
+                  #{item.text}
+                </button>
+              ));
+            })()}
             {article.author && article.author !== article.publication && (
               <span className="text-gray-400 dark:text-gray-500 text-[11px] italic">
                 by {article.author}

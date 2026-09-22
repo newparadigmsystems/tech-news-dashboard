@@ -6,8 +6,6 @@ export default function Header({
   onSearchChange,
   isRefreshing,
   onRefresh,
-  isCurating,
-  onCurate,
   stats,
   darkMode,
   onToggleDarkMode
@@ -84,21 +82,6 @@ export default function Header({
 
         {/* Actions (Refresh, Theme, Stats) */}
         <div className="flex items-center gap-2 shrink-0">
-          {/* AI Curation Button (when Gemini is active) */}
-          {stats?.gemini_enabled && (
-            <button
-              onClick={onCurate}
-              disabled={isCurating}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-purple-50 hover:bg-purple-100 dark:bg-purple-950/40 dark:hover:bg-purple-900/40 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800 transition-all"
-              title="Run Gemini to extract entities and cluster duplicate stories"
-            >
-              <Sparkles className={`w-3.5 h-3.5 ${isCurating ? 'animate-spin text-purple-500' : 'text-purple-500'}`} />
-              <span className="hidden sm:inline">
-                {isCurating ? 'Curating...' : 'AI Curate'}
-              </span>
-            </button>
-          )}
-
           {/* Refresh Feeds Button */}
           <button
             onClick={onRefresh}

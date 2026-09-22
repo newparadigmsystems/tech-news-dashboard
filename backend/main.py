@@ -5,17 +5,22 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Query, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from pathlib import Path
 from dotenv import load_dotenv
 
 # Load .env variables
+ENV_FILE = Path(__file__).resolve().parent / ".env"
+if ENV_FILE.exists():
+    load_dotenv(ENV_FILE)
 load_dotenv()
 
 from database import (
     init_db, query_articles, get_categories_stats,
-    get_publications_stats, get_overview_stats, classify_and_update_all_articles
+    get_publications_stats, get_overview_stats, classify_and_update_all_articles,
+    recategorize_all_articles
 )
 from ingestion import ingest_all_feeds, load_feeds
-from curator import run_curation_pipeline, is_gemini_available
+from curator import run_curation_pipeline, is_gemini_available, is_curating_now
 
 # Background scheduler for periodic sync
 scheduler = AsyncIOScheduler()
@@ -26,7 +31,7 @@ async def scheduled_feed_sync():
         res = await ingest_all_feeds()
         print(f"[Scheduler] Ingested {res.get('new_articles_added', 0)} new articles.")
         if is_gemini_available():
-            await run_curation_pipeline(limit=30)
+            await run_curation_pipeline(limit=40)
     except Exception as e:
         print(f"[Scheduler] Error during scheduled sync: {e}")
 
@@ -39,11 +44,24 @@ async def lifespan(app: FastAPI):
     if cleaned > 0:
         print(f"[Startup] Classified and flagged {cleaned} non-news items (events/deals/workshops).")
     
+    # Run intelligent heuristic recategorization across all articles
+    recategorized = recategorize_all_articles()
+    if recategorized > 0:
+        print(f"[Startup] Recategorized {recategorized} articles to appropriate domains.")
+
+    async def delayed_startup_curation():
+        await asyncio.sleep(1)
+        if is_gemini_available():
+            print("[Startup] Launching background LLM curation for uncurated articles...")
+            await run_curation_pipeline(limit=40)
+
     # Check if DB has any articles; if empty, trigger initial ingestion
     stats = get_overview_stats()
     if stats["total_articles"] == 0:
         print("[Startup] Database is empty. Launching initial feed ingestion...")
         asyncio.create_task(scheduled_feed_sync())
+    else:
+        asyncio.create_task(delayed_startup_curation())
         
     # Start scheduler (run every 30 minutes)
     scheduler.add_job(scheduled_feed_sync, 'interval', minutes=30)
@@ -106,9 +124,11 @@ def get_publications(exclude_noise: bool = Query(True)):
 
 @app.get("/api/stats")
 def get_stats():
+    import curator
     stats = get_overview_stats()
     stats["gemini_enabled"] = is_gemini_available()
     stats["is_refreshing"] = is_refreshing
+    stats["is_curating"] = curator.is_curating_now
     return stats
 
 @app.get("/api/feeds")
@@ -123,7 +143,7 @@ async def background_refresh_task():
     try:
         await ingest_all_feeds()
         if is_gemini_available():
-            await run_curation_pipeline(limit=30)
+            await run_curation_pipeline(limit=40)
     finally:
         is_refreshing = False
 

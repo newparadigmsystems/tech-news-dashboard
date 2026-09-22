@@ -34,7 +34,6 @@ export default function App() {
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [isCurating, setIsCurating] = useState(false);
   const [error, setError] = useState(null);
   const [showScrollTop, setShowScrollTop] = useState(false);
 
@@ -193,21 +192,6 @@ export default function App() {
     }
   };
 
-  // Trigger Gemini AI Curation
-  const handleCurate = async () => {
-    setIsCurating(true);
-    try {
-      const res = await fetch('/api/curate', { method: 'POST' });
-      if (res.ok) {
-        await Promise.all([fetchMetadata(), fetchArticles()]);
-      }
-    } catch (e) {
-      console.error('Curation error:', e);
-    } finally {
-      setIsCurating(false);
-    }
-  };
-
   // Reset Filters
   const handleResetFilters = () => {
     setSearchQuery('');
@@ -239,8 +223,6 @@ export default function App() {
         onSearchChange={setSearchQuery}
         isRefreshing={isRefreshing}
         onRefresh={handleRefresh}
-        isCurating={isCurating}
-        onCurate={handleCurate}
         stats={stats}
         darkMode={darkMode}
         onToggleDarkMode={() => setDarkMode(!darkMode)}

@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Optional, List, Dict, Any
 
 from filters import is_noise_or_event
+from classifier import classify_article
 
 DB_DIR = Path(__file__).resolve().parent / "data"
 DB_PATH = DB_DIR / "news.db"
@@ -38,15 +39,21 @@ def init_db():
         entities TEXT DEFAULT '[]',
         cluster_id TEXT,
         is_noise INTEGER DEFAULT 0,
+        curated INTEGER DEFAULT 0,
+        key_takeaway TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
     """)
 
-    # Check migration for existing tables without is_noise
+    # Check migration for existing tables without columns
     cursor.execute("PRAGMA table_info(articles);")
     cols = [col["name"] for col in cursor.fetchall()]
     if "is_noise" not in cols:
         cursor.execute("ALTER TABLE articles ADD COLUMN is_noise INTEGER DEFAULT 0;")
+    if "curated" not in cols:
+        cursor.execute("ALTER TABLE articles ADD COLUMN curated INTEGER DEFAULT 0;")
+    if "key_takeaway" not in cols:
+        cursor.execute("ALTER TABLE articles ADD COLUMN key_takeaway TEXT;")
 
     # Indices for blazing fast filtering
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_articles_published ON articles(published_at DESC);")
@@ -54,6 +61,7 @@ def init_db():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_articles_publication ON articles(publication);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_articles_cluster ON articles(cluster_id);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_articles_noise ON articles(is_noise);")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_articles_curated ON articles(curated);")
 
     # Full text search table (FTS5)
     cursor.execute("""
@@ -112,6 +120,16 @@ def upsert_article(article_data: Dict[str, Any]) -> bool:
     )
     is_noise_val = 1 if is_noise_flag else 0
     
+    # Classify category dynamically based on article content
+    category, category_label = classify_article(
+        title=article_data["title"],
+        excerpt=article_data.get("excerpt", ""),
+        tags=tags,
+        feed_id=article_data.get("feed_id", ""),
+        default_category=article_data.get("category", "general"),
+        default_label=article_data.get("category_label", "General Tech")
+    )
+    
     try:
         cursor.execute("""
         INSERT INTO articles (
@@ -124,8 +142,8 @@ def upsert_article(article_data: Dict[str, Any]) -> bool:
             title = excluded.title,
             excerpt = CASE WHEN excluded.excerpt IS NOT NULL AND excluded.excerpt != '' THEN excluded.excerpt ELSE articles.excerpt END,
             image_url = CASE WHEN excluded.image_url IS NOT NULL AND excluded.image_url != '' THEN excluded.image_url ELSE articles.image_url END,
-            category = excluded.category,
-            category_label = excluded.category_label,
+            category = CASE WHEN articles.curated = 1 THEN articles.category ELSE excluded.category END,
+            category_label = CASE WHEN articles.curated = 1 THEN articles.category_label ELSE excluded.category_label END,
             is_noise = excluded.is_noise
         """, {
             "guid": article_data["guid"],
@@ -133,8 +151,8 @@ def upsert_article(article_data: Dict[str, Any]) -> bool:
             "link": article_data["link"],
             "publication": article_data["publication"],
             "feed_id": article_data["feed_id"],
-            "category": article_data["category"],
-            "category_label": article_data["category_label"],
+            "category": category,
+            "category_label": category_label,
             "published_at": article_data["published_at"],
             "excerpt": article_data.get("excerpt", ""),
             "image_url": article_data.get("image_url", ""),
@@ -215,7 +233,8 @@ def query_articles(
     offset = (page - 1) * page_size
     query_sql = f"""
     SELECT id, guid, title, link, publication, feed_id, category, category_label,
-           published_at, excerpt, image_url, author, tags, entities, cluster_id, is_noise
+           published_at, excerpt, image_url, author, tags, entities, cluster_id, is_noise,
+           curated, key_takeaway
     FROM articles
     {where_sql}
     ORDER BY {sort_sql}
@@ -245,7 +264,9 @@ def query_articles(
             "tags": json.loads(r["tags"]) if r["tags"] else [],
             "entities": json.loads(r["entities"]) if r["entities"] else [],
             "cluster_id": r["cluster_id"],
-            "is_noise": bool(r["is_noise"])
+            "is_noise": bool(r["is_noise"]),
+            "curated": bool(r["curated"]) if "curated" in r.keys() else False,
+            "key_takeaway": r["key_takeaway"] if "key_takeaway" in r.keys() else None
         })
         
     conn.close()
@@ -328,6 +349,47 @@ def classify_and_update_all_articles() -> int:
         is_noise, _ = is_noise_or_event(title=title, excerpt=excerpt, tags=tags)
         cursor.execute("UPDATE articles SET is_noise = ? WHERE id = ?", (1 if is_noise else 0, article_id))
         if is_noise:
+            updated += 1
+            
+    conn.commit()
+    conn.close()
+    return updated
+
+def recategorize_all_articles() -> int:
+    """Retroactively runs heuristic classification on all uncurated articles in the DB."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+    SELECT id, title, excerpt, tags, feed_id, category, category_label, curated
+    FROM articles
+    WHERE (curated = 0 OR curated IS NULL)
+    """)
+    rows = cursor.fetchall()
+    
+    updated = 0
+    for r in rows:
+        article_id = r["id"]
+        title = r["title"]
+        excerpt = r["excerpt"] or ""
+        tags = json.loads(r["tags"]) if r["tags"] else []
+        feed_id = r["feed_id"] or ""
+        current_cat = r["category"]
+        
+        new_cat, new_label = classify_article(
+            title=title,
+            excerpt=excerpt,
+            tags=tags,
+            feed_id=feed_id,
+            default_category=current_cat,
+            default_label=r["category_label"]
+        )
+        
+        if new_cat != current_cat:
+            cursor.execute("""
+            UPDATE articles
+            SET category = ?, category_label = ?
+            WHERE id = ?
+            """, (new_cat, new_label, article_id))
             updated += 1
             
     conn.commit()
