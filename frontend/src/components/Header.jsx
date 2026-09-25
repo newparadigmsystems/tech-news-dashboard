@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { Search, RefreshCw, Moon, Sun, Newspaper, Sparkles, X } from 'lucide-react';
+import { Search, RefreshCw, Moon, Sun, Newspaper, Sparkles, X, Database } from 'lucide-react';
 
 export default function Header({
   searchQuery,
@@ -27,6 +27,10 @@ export default function Header({
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
+
+  const isCurating = stats?.is_curating;
+  const isSyncing = isRefreshing || stats?.is_refreshing;
+  const curationProgress = stats?.curation_progress;
 
   return (
     <header className="sticky top-0 z-30 bg-white/90 dark:bg-dark-900/90 backdrop-blur-md border-b border-gray-200 dark:border-gray-800 transition-colors">
@@ -80,24 +84,53 @@ export default function Header({
           </div>
         </div>
 
-        {/* Actions (Refresh, Theme, Stats) */}
+        {/* Actions (Status Pill, Refresh, Backup, Theme) */}
         <div className="flex items-center gap-2 shrink-0">
+          {/* Live AI Curation Status Badge */}
+          {isCurating && (
+            <div className="hidden lg:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-purple-50 dark:bg-purple-950/50 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800/80 text-xs font-medium">
+              <Sparkles className="w-3.5 h-3.5 text-purple-500 animate-spin" />
+              <span>
+                AI Summarizing{curationProgress?.total > 0 ? ` (${curationProgress.current}/${curationProgress.total})` : '...'}
+              </span>
+            </div>
+          )}
+
+          {/* Live Feed Ingestion Status Badge */}
+          {isSyncing && !isCurating && (
+            <div className="hidden lg:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800/80 text-xs font-medium">
+              <RefreshCw className="w-3.5 h-3.5 text-indigo-500 animate-spin" />
+              <span>Fetching Feeds...</span>
+            </div>
+          )}
+
           {/* Refresh Feeds Button */}
           <button
             onClick={onRefresh}
-            disabled={isRefreshing}
+            disabled={isSyncing || isCurating}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${
-              isRefreshing
-                ? 'bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 border-indigo-200 dark:border-indigo-800'
+              isSyncing || isCurating
+                ? 'bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 border-indigo-200 dark:border-indigo-800 cursor-not-allowed'
                 : 'bg-white dark:bg-dark-800 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-dark-700 border-gray-200 dark:border-gray-700'
             }`}
-            title="Fetch latest feeds"
+            title="Fetch latest feeds and generate AI takeaways"
           >
-            <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin text-indigo-500' : ''}`} />
+            <RefreshCw className={`w-3.5 h-3.5 ${(isSyncing || isCurating) ? 'animate-spin text-indigo-500' : ''}`} />
             <span className="hidden sm:inline">
-              {isRefreshing ? 'Syncing...' : 'Refresh'}
+              {isSyncing ? 'Syncing...' : isCurating ? 'Curating...' : 'Refresh'}
             </span>
           </button>
+
+          {/* Database Backup Download Button */}
+          <a
+            href="/api/backup/download"
+            download
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-semibold text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-dark-800 border border-gray-200 dark:border-gray-700 transition-colors"
+            title="Download safe SQLite snapshot (.db) to your computer"
+          >
+            <Database className="w-3.5 h-3.5 text-indigo-500" />
+            <span className="hidden md:inline">Backup DB</span>
+          </a>
 
           {/* Dark / Light Toggle */}
           <button

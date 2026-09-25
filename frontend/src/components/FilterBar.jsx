@@ -13,12 +13,12 @@ const CATEGORIES = [
 ];
 
 const DATE_PRESETS = [
-  { id: 'all', label: 'All Time' },
+  { id: '7d', label: 'Past 7d' },
   { id: 'today', label: 'Today' },
   { id: '24h', label: 'Past 24h' },
   { id: '48h', label: 'Past 48h' },
-  { id: '7d', label: 'Past 7d' },
   { id: '30d', label: 'Past 30d' },
+  { id: 'all', label: 'All Time' },
   { id: 'custom', label: 'Custom' }
 ];
 

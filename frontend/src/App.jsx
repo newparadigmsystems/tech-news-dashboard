@@ -16,7 +16,7 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [category, setCategory] = useState('all');
-  const [datePreset, setDatePreset] = useState('all');
+  const [datePreset, setDatePreset] = useState('7d');
   const [customStartDate, setCustomStartDate] = useState('');
   const [customEndDate, setCustomEndDate] = useState('');
   const [publication, setPublication] = useState('all');
@@ -176,16 +176,54 @@ export default function App() {
     fetchArticles();
   }, [fetchArticles]);
 
+  // Poll backend sync & curation status
+  useEffect(() => {
+    let intervalId = null;
+    let wasActive = false;
+
+    const pollStats = async () => {
+      try {
+        const res = await fetch('/api/stats');
+        if (res.ok) {
+          const s = await res.json();
+          setStats(s);
+          const active = Boolean(s.is_refreshing || s.is_curating);
+          setIsRefreshing(active);
+
+          if (wasActive && !active) {
+            // Background sync + curation just finished! Update feed with new takeaways
+            wasActive = false;
+            fetchMetadata();
+            fetchArticles();
+          } else if (active) {
+            wasActive = true;
+          }
+        }
+      } catch (err) {
+        console.error('Error polling sync stats:', err);
+      }
+    };
+
+    // Check immediately on mount
+    pollStats();
+    // Poll every 3 seconds to keep sync status live
+    intervalId = setInterval(pollStats, 3000);
+
+    return () => {
+      if (intervalId) clearInterval(intervalId);
+    };
+  }, [fetchArticles]);
+
   // Trigger Feed Refresh
   const handleRefresh = async () => {
     setIsRefreshing(true);
     try {
       await fetch('/api/refresh', { method: 'POST' });
-      // Poll briefly then reload
-      setTimeout(async () => {
-        await Promise.all([fetchMetadata(), fetchArticles()]);
-        setIsRefreshing(false);
-      }, 4000);
+      const res = await fetch('/api/stats');
+      if (res.ok) {
+        const s = await res.json();
+        setStats(s);
+      }
     } catch (e) {
       console.error('Refresh error:', e);
       setIsRefreshing(false);
@@ -197,7 +235,7 @@ export default function App() {
     setSearchQuery('');
     setDebouncedQuery('');
     setCategory('all');
-    setDatePreset('all');
+    setDatePreset('7d');
     setCustomStartDate('');
     setCustomEndDate('');
     setPublication('all');
@@ -208,7 +246,7 @@ export default function App() {
   const hasActiveFilters =
     Boolean(debouncedQuery.trim()) ||
     category !== 'all' ||
-    datePreset !== 'all' ||
+    datePreset !== '7d' ||
     publication !== 'all';
 
   const scrollToTop = () => {

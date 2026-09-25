@@ -26,10 +26,15 @@ def is_gemini_available() -> bool:
 
 # Recommended model cascade for speed, reasoning, and reliability
 MODELS_TO_TRY = [
-    "gemini-3.1-flash-lite",
-    "gemini-3.5-flash-lite",
-    "gemini-3.6-flash"
+    "gemini-3.8-flash",
+    "gemini-3.7-flash",
+    "gemini-3-flash-preview"
 ]
+
+curation_progress: Dict[str, int] = {"total": 0, "current": 0}
+
+def get_curation_progress() -> Dict[str, int]:
+    return dict(curation_progress)
 
 async def curate_article_batch(client: Any, articles: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Sends a batch of articles to Gemini and parses the structured response."""
@@ -69,27 +74,40 @@ async def curate_article_batch(client: Any, articles: List[Dict[str, Any]]) -> L
     last_error = None
 
     for model_name in MODELS_TO_TRY:
-        try:
-            response = await client.aio.models.generate_content(
-                model=model_name,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    temperature=0.2
+        for attempt in range(2):
+            try:
+                response = await client.aio.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        temperature=0.2
+                    )
                 )
-            )
-            if response and response.text:
-                break
-        except Exception as ex:
-            last_error = ex
-            continue
+                if response and response.text:
+                    break
+            except Exception as ex:
+                last_error = ex
+                # Brief exponential backoff for transient 503 high demand or rate spikes
+                await asyncio.sleep((attempt + 1) * 1.5)
+                continue
+        if response and response.text:
+            break
 
     if not response or not response.text:
         raise RuntimeError(f"All Gemini models failed. Last error: {last_error}")
 
-    return json.loads(response.text)
+    raw_text = response.text.strip()
+    if raw_text.startswith("```json"):
+        raw_text = raw_text[7:]
+    elif raw_text.startswith("```"):
+        raw_text = raw_text[3:]
+    if raw_text.endswith("```"):
+        raw_text = raw_text[:-3]
 
-async def run_curation_pipeline(limit: int = 40, batch_size: int = 20) -> Dict[str, Any]:
+    return json.loads(raw_text.strip())
+
+async def run_curation_pipeline(limit: int = 100, batch_size: int = 15) -> Dict[str, Any]:
     """
     Curates recent uncurated articles in the background using Gemini.
     - Accurately classifies categories (ai, cybersecurity, cloud, quantum, etc.)
@@ -99,7 +117,7 @@ async def run_curation_pipeline(limit: int = 40, batch_size: int = 20) -> Dict[s
     - Sets curated = 1
     Runs non-blockingly and safely.
     """
-    global is_curating_now
+    global is_curating_now, curation_progress
     if not is_gemini_available():
         return {
             "status": "skipped",
@@ -132,10 +150,12 @@ async def run_curation_pipeline(limit: int = 40, batch_size: int = 20) -> Dict[s
 
             if not rows:
                 conn.close()
+                curation_progress = {"total": 0, "current": 0}
                 return {"status": "up_to_date", "curated_count": 0}
 
             articles_to_process = [dict(r) for r in rows]
             total_updated = 0
+            curation_progress = {"total": len(articles_to_process), "current": 0}
 
             # Process in small non-blocking batches
             for i in range(0, len(articles_to_process), batch_size):
@@ -166,11 +186,12 @@ async def run_curation_pipeline(limit: int = 40, batch_size: int = 20) -> Dict[s
                             total_updated += 1
 
                     conn.commit()
+                    curation_progress["current"] = total_updated
                 except Exception as batch_err:
                     print(f"[Curator] Batch curation error: {batch_err}")
 
                 # Yield control briefly to event loop between batches
-                await asyncio.sleep(0.2)
+                await asyncio.sleep(0.3)
 
             conn.close()
             print(f"[Curator] Background curation complete: {total_updated} articles curated.")
@@ -187,3 +208,4 @@ async def run_curation_pipeline(limit: int = 40, batch_size: int = 20) -> Dict[s
             }
         finally:
             is_curating_now = False
+            curation_progress = {"total": 0, "current": 0}

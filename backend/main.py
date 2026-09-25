@@ -14,32 +14,61 @@ if ENV_FILE.exists():
     load_dotenv(ENV_FILE)
 load_dotenv()
 
+from fastapi.responses import FileResponse
+from datetime import datetime
+
 from database import (
     init_db, query_articles, get_categories_stats,
     get_publications_stats, get_overview_stats, classify_and_update_all_articles,
-    recategorize_all_articles
+    recategorize_all_articles, backup_database, get_backup_file_path, get_uncurated_count
 )
 from ingestion import ingest_all_feeds, load_feeds
-from curator import run_curation_pipeline, is_gemini_available, is_curating_now
+from curator import run_curation_pipeline, is_gemini_available, is_curating_now, get_curation_progress
 
 # Background scheduler for periodic sync
 scheduler = AsyncIOScheduler()
+is_refreshing = False
 
-async def scheduled_feed_sync():
-    print("[Scheduler] Running periodic feed sync...")
+async def run_sync_and_curation():
+    """Ingests latest feeds, backs up the DB, and runs AI curation on uncurated articles."""
+    global is_refreshing
+    import curator
+    if is_refreshing:
+        print("[Sync] Feed sync already in progress, skipping duplicate request.")
+        return
+    is_refreshing = True
     try:
+        print("[Sync] Fetching latest feeds...")
         res = await ingest_all_feeds()
-        print(f"[Scheduler] Ingested {res.get('new_articles_added', 0)} new articles.")
-        if is_gemini_available():
-            await run_curation_pipeline(limit=40)
+        new_count = res.get('new_articles_added', 0)
+        print(f"[Sync] Ingested {new_count} new articles.")
+        # Create an automatic verified snapshot after ingestion
+        backup_database()
     except Exception as e:
-        print(f"[Scheduler] Error during scheduled sync: {e}")
+        print(f"[Sync] Error during feed ingestion: {e}")
+    finally:
+        is_refreshing = False
+
+    # Run AI curation on uncurated articles
+    if is_gemini_available():
+        try:
+            print("[Sync] Launching AI curation pipeline for uncurated articles...")
+            cur_res = await run_curation_pipeline(limit=100)
+            print(f"[Sync] Curation complete: {cur_res}")
+        except Exception as e:
+            print(f"[Sync] Error during AI curation: {e}")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup: Initialize DB & run noise classification
     print("[Startup] Initializing SQLite database...")
     init_db()
+    
+    # Create safety backup on startup
+    backup_path = backup_database()
+    if backup_path:
+        print(f"[Startup] Verified database backup created at {backup_path.name}")
+
     cleaned = classify_and_update_all_articles()
     if cleaned > 0:
         print(f"[Startup] Classified and flagged {cleaned} non-news items (events/deals/workshops).")
@@ -49,28 +78,19 @@ async def lifespan(app: FastAPI):
     if recategorized > 0:
         print(f"[Startup] Recategorized {recategorized} articles to appropriate domains.")
 
-    async def delayed_startup_curation():
-        await asyncio.sleep(1)
-        if is_gemini_available():
-            print("[Startup] Launching background LLM curation for uncurated articles...")
-            await run_curation_pipeline(limit=40)
-
-    # Check if DB has any articles; if empty, trigger initial ingestion
-    stats = get_overview_stats()
-    if stats["total_articles"] == 0:
-        print("[Startup] Database is empty. Launching initial feed ingestion...")
-        asyncio.create_task(scheduled_feed_sync())
-    else:
-        asyncio.create_task(delayed_startup_curation())
+    # ALWAYS launch background feed sync + AI curation on startup
+    print("[Startup] Launching background startup feed sync & AI curation...")
+    asyncio.create_task(run_sync_and_curation())
         
     # Start scheduler (run every 30 minutes)
-    scheduler.add_job(scheduled_feed_sync, 'interval', minutes=30)
+    scheduler.add_job(run_sync_and_curation, 'interval', minutes=30)
     scheduler.start()
     
     yield
     
-    # Shutdown
+    # Shutdown: cleanly shut down scheduler and make final backup
     scheduler.shutdown()
+    backup_database()
 
 app = FastAPI(
     title="Tech News Aggregator API",
@@ -129,31 +149,22 @@ def get_stats():
     stats["gemini_enabled"] = is_gemini_available()
     stats["is_refreshing"] = is_refreshing
     stats["is_curating"] = curator.is_curating_now
+    stats["curation_progress"] = curator.get_curation_progress()
+    stats["uncurated_count"] = get_uncurated_count()
     return stats
 
 @app.get("/api/feeds")
 def get_feeds():
     return load_feeds()
 
-async def background_refresh_task():
-    global is_refreshing
-    if is_refreshing:
-        return
-    is_refreshing = True
-    try:
-        await ingest_all_feeds()
-        if is_gemini_available():
-            await run_curation_pipeline(limit=40)
-    finally:
-        is_refreshing = False
-
 @app.post("/api/refresh")
 async def trigger_refresh(background_tasks: BackgroundTasks):
     global is_refreshing
-    if is_refreshing:
-        return {"status": "in_progress", "message": "Feed refresh already underway"}
+    import curator
+    if is_refreshing or curator.is_curating_now:
+        return {"status": "in_progress", "message": "Feed refresh or AI curation is already underway"}
     
-    background_tasks.add_task(background_refresh_task)
+    background_tasks.add_task(run_sync_and_curation)
     return {"status": "started", "message": "Feed refresh started in background"}
 
 @app.post("/api/curate")
@@ -163,8 +174,34 @@ async def trigger_curate():
             status_code=400,
             detail="GEMINI_API_KEY environment variable is not configured"
         )
-    result = await run_curation_pipeline(limit=50)
+    result = await run_curation_pipeline(limit=100)
     return result
+
+@app.post("/api/backup")
+def create_backup():
+    path = backup_database()
+    if not path or not path.exists():
+        raise HTTPException(status_code=500, detail="Failed to create database backup")
+    return {
+        "status": "success",
+        "filename": path.name,
+        "size_bytes": path.stat().st_size
+    }
+
+@app.get("/api/backup/download")
+def download_backup():
+    path = get_backup_file_path()
+    if not path or not path.exists():
+        path = backup_database()
+    if not path or not path.exists():
+        raise HTTPException(status_code=404, detail="No backup file available")
+    
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    return FileResponse(
+        path=str(path),
+        filename=f"techradar_backup_{today_str}.db",
+        media_type="application/x-sqlite3"
+    )
 
 if __name__ == "__main__":
     import uvicorn

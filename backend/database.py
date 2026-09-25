@@ -16,6 +16,72 @@ def get_db_connection() -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     return conn
 
+def backup_database() -> Optional[Path]:
+    """
+    Creates a transactionally safe SQLite online backup of news.db.
+    Saves to:
+    - backend/data/backups/news_backup_latest.db
+    - backend/data/backups/news_backup_YYYYMMDD.db (daily snapshot)
+    Maintains the last 7 daily snapshots.
+    Returns Path to latest backup file.
+    """
+    if not DB_PATH.exists():
+        return None
+
+    backup_dir = DB_DIR / "backups"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+
+    today_str = datetime.now().strftime("%Y%m%d")
+    daily_backup = backup_dir / f"news_backup_{today_str}.db"
+    latest_backup = backup_dir / "news_backup_latest.db"
+
+    try:
+        conn_src = get_db_connection()
+        # Backup to daily snapshot
+        conn_dest_daily = sqlite3.connect(str(daily_backup))
+        conn_src.backup(conn_dest_daily)
+        conn_dest_daily.close()
+
+        # Backup to latest snapshot
+        conn_dest_latest = sqlite3.connect(str(latest_backup))
+        conn_src.backup(conn_dest_latest)
+        conn_dest_latest.close()
+
+        conn_src.close()
+
+        # Keep only the last 7 daily backup files
+        daily_files = sorted(backup_dir.glob("news_backup_2*.db"))
+        if len(daily_files) > 7:
+            for old_file in daily_files[:-7]:
+                try:
+                    old_file.unlink()
+                except Exception:
+                    pass
+
+        return latest_backup
+    except Exception as e:
+        print(f"[Backup] Error during database backup: {e}")
+        return None
+
+def get_backup_file_path() -> Optional[Path]:
+    latest = DB_DIR / "backups" / "news_backup_latest.db"
+    if latest.exists():
+        return latest
+    if DB_PATH.exists():
+        return DB_PATH
+    return None
+
+def get_uncurated_count() -> int:
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) as count FROM articles WHERE (curated = 0 OR curated IS NULL) AND is_noise = 0")
+        cnt = cursor.fetchone()["count"]
+        conn.close()
+        return cnt
+    except Exception:
+        return 0
+
 def init_db():
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -193,10 +259,11 @@ def query_articles(
         where_clauses.append("articles.is_noise = 0")
 
     if q and q.strip():
-        # Match using FTS5
+        # Match using FTS5 (title, excerpt, publication, tags, entities) and key_takeaway
         clean_q = q.replace('"', '""').strip()
-        where_clauses.append("articles.id IN (SELECT rowid FROM articles_fts WHERE articles_fts MATCH :search_term)")
+        where_clauses.append("(articles.id IN (SELECT rowid FROM articles_fts WHERE articles_fts MATCH :search_term) OR articles.key_takeaway LIKE :like_term)")
         params["search_term"] = f'"{clean_q}"*'
+        params["like_term"] = f"%{clean_q}%"
         
     if category and category != "all":
         where_clauses.append("category = :category")
